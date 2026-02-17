@@ -41,6 +41,7 @@ def main():
         celldetector.logger.info("Processing single WSI file")
         wsi_path = Path(args["wsi_path"])
         wsi_name = wsi_path.stem
+        print("work1")
         celldetector.process_wsi(
             wsi_path=wsi_path,
             wsi_properties=args.get("wsi_properties", {}),

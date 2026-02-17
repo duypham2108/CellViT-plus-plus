@@ -49,3 +49,7 @@ cufile.log
 # annotation tool
 /annotation_tool/application
 /annotation_tool/Dockerfile
+
+*.ipynb
+.ipynb_checkpoints/
+*.png

@@ -34,6 +34,87 @@ from pathopatch.patch_extraction.dataset import (
 import snappy
 from cellvit.inference.wsi_meta import load_wsi_meta
 
+from skimage import exposure, filters
+import numpy as np
+import logging
+import os
+from PIL import Image
+from torchvision import transforms as T
+
+
+class GammaCorrection:
+    def __init__(self, gamma=1.4, num_examples=15):
+        self.gamma = gamma
+        self.logger = logging.getLogger()
+        self.processed_count = 0
+        self.example_dir = "gamma_correction_examples"
+        self.num_examples = num_examples
+        self.saved_examples = 0
+        self.save_probability = 0.01  # Will adjust dynamically
+        os.makedirs(self.example_dir, exist_ok=True)
+        self.logger.info(f"Initialized GammaCorrection with gamma={gamma}")
+        self.logger.info(
+            f"Will save {num_examples} random example patches in {self.example_dir}"
+        )
+
+    def should_save_example(self):
+        """Dynamically adjust save probability to target num_examples"""
+        if self.saved_examples >= self.num_examples:
+            return False
+
+        # Increase probability if we're not saving enough examples
+        if self.processed_count > 0:
+            expected_saved = self.processed_count * self.save_probability
+            if expected_saved > 0:
+                ratio = self.saved_examples / expected_saved
+                if ratio < 0.8:  # If we're saving less than expected
+                    self.save_probability *= 1.5
+                elif ratio > 1.2:  # If we're saving more than expected
+                    self.save_probability *= 0.7
+
+        return np.random.random() < self.save_probability
+
+    def __call__(self, image):
+        if isinstance(image, torch.Tensor):
+            image = image.numpy().transpose(1, 2, 0)
+
+        # Randomly save example patches
+        should_save = self.should_save_example()
+        if should_save:
+            before_img = Image.fromarray((image * 255).astype(np.uint8))
+            before_img.save(
+                os.path.join(
+                    self.example_dir, f"patch_{self.processed_count}_before.png"
+                )
+            )
+            self.logger.info(f"Saved original patch {self.processed_count}")
+
+        # Apply gamma correction
+        image_gamma = exposure.adjust_gamma(image, gamma=self.gamma)
+
+        # Save after image if we saved before image
+        if should_save:
+            after_img = Image.fromarray((image_gamma * 255).astype(np.uint8))
+            after_img.save(
+                os.path.join(
+                    self.example_dir, f"patch_{self.processed_count}_after.png"
+                )
+            )
+            self.logger.info(f"Saved gamma corrected patch {self.processed_count}")
+            self.saved_examples += 1
+
+        # Convert back to tensor if needed
+        if isinstance(image, np.ndarray):
+            image_gamma = torch.from_numpy(image_gamma.transpose(2, 0, 1))
+
+        self.processed_count += 1
+        if self.processed_count % 100 == 0:  # Log every 100 patches
+            self.logger.info(
+                f"GammaCorrection: Processed {self.processed_count} patches, saved {self.saved_examples} examples"
+            )
+
+        return image_gamma
+
 
 class CellViTInferenceMemory(CellViTInference):
     def __init__(
@@ -109,10 +190,28 @@ class CellViTInferenceMemory(CellViTInference):
         )
         wsi_path = Path(wsi_path)
 
+        # Create transform pipeline with gamma correction
+        transform_settings = self.run_conf["transformations"]
+        if "normalize" in transform_settings:
+            mean = transform_settings["normalize"].get("mean", (0.5, 0.5, 0.5))
+            std = transform_settings["normalize"].get("std", (0.5, 0.5, 0.5))
+        else:
+            mean = (0.5, 0.5, 0.5)
+            std = (0.5, 0.5, 0.5)
+
+        self.logger.info("Setting up transform pipeline with:")
+        self.logger.info("1. ToTensor")
+        self.logger.info("2. GammaCorrection (gamma=3.4)")
+        self.logger.info(f"3. Normalize (mean={mean}, std={std})")
+
+        transforms = T.Compose(
+            [T.ToTensor(), GammaCorrection(gamma=3.4), T.Normalize(mean=mean, std=std)]
+        )
+
         wsi_inference_dataset = LivePatchWSIDataset(
             slide_processor_config=dataset_config,
             logger=self.logger,
-            transforms=self.inference_transforms,
+            transforms=transforms,  # Use our new transform pipeline
         )
         wsi_inference_dataloader = LivePatchWSIDataloader(
             dataset=wsi_inference_dataset, batch_size=self.batch_size, shuffle=False

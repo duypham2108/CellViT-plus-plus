@@ -3,7 +3,8 @@
 #
 # @ Fabian Hörst, fabian.hoerst@uk-essen.de
 # Institute for Artifical Intelligence in Medicine,
-# University Medicine Essenimport os
+# University Medicine Essen
+import os
 import sys
 
 current_dir = os.path.dirname(os.path.abspath(__file__))

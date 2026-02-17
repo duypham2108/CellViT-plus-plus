@@ -50,6 +50,63 @@ from cellvit.utils.logger import Logger
 from cellvit.utils.tools import unflatten_dict
 from cellvit.models.classifier.linear_classifier import LinearClassifier
 
+from skimage import exposure, filters
+import numpy as np
+import logging
+import os
+from PIL import Image
+
+
+class GammaCorrection:
+    def __init__(self, gamma=1.4):
+        self.gamma = gamma
+        self.logger = logging.getLogger()
+        self.processed_count = 0
+        self.example_dir = "gamma_correction_examples"
+        os.makedirs(self.example_dir, exist_ok=True)
+        self.logger.info(f"Initialized GammaCorrection with gamma={gamma}")
+        self.logger.info(f"Example patches will be saved in {self.example_dir}")
+
+    def __call__(self, image):
+        if isinstance(image, torch.Tensor):
+            image = image.numpy().transpose(1, 2, 0)
+
+        # Save example patches (first 3 patches)
+        if self.processed_count < 3:
+            before_img = Image.fromarray((image * 255).astype(np.uint8))
+            before_img.save(
+                os.path.join(
+                    self.example_dir, f"patch_{self.processed_count}_before.png"
+                )
+            )
+            self.logger.info(f"Saved original patch {self.processed_count}")
+
+        # Apply gamma correction
+        image_gamma = exposure.adjust_gamma(image, gamma=self.gamma)
+
+        # Save example patches after correction
+        if self.processed_count < 3:
+            after_img = Image.fromarray((image_gamma * 255).astype(np.uint8))
+            after_img.save(
+                os.path.join(
+                    self.example_dir, f"patch_{self.processed_count}_after.png"
+                )
+            )
+            self.logger.info(f"Saved gamma corrected patch {self.processed_count}")
+
+        # Convert back to tensor if needed
+        if isinstance(image, np.ndarray):
+            image_gamma = torch.from_numpy(image_gamma.transpose(2, 0, 1))
+
+        self.processed_count += 1
+        if self.processed_count % 100 == 0:  # Log every 100 patches
+            self.logger.info(
+                f"GammaCorrection: Processed {self.processed_count} patches"
+            )
+
+        return image_gamma
+
+
 # get the project root:
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -57,6 +114,7 @@ sys.path.append(current_dir)
 sys.path.append(project_root)
 project_root = os.path.dirname(project_root)
 sys.path.append(project_root)
+
 
 class CellViTInference:
     """Cell Segmentation Inference class.
@@ -351,8 +409,18 @@ class CellViTInference:
         else:
             mean = (0.5, 0.5, 0.5)
             std = (0.5, 0.5, 0.5)
+
+        self.logger.info("Setting up transform pipeline with:")
+        self.logger.info("1. ToTensor")
+        self.logger.info("2. GammaCorrection (gamma=1.4)")
+        self.logger.info(f"3. Normalize (mean={mean}, std={std})")
+
         self.inference_transforms = T.Compose(
-            [T.ToTensor(), T.Normalize(mean=mean, std=std)]
+            [
+                T.ToTensor(),
+                GammaCorrection(gamma=1.4),  # Add gamma correction before normalization
+                T.Normalize(mean=mean, std=std),
+            ]
         )
 
     def _setup_amp(self, enforce_mixed_precision: bool = False) -> None:
@@ -372,11 +440,7 @@ class CellViTInference:
 
     def _setup_worker(self) -> None:
         """Setup the worker for inference"""
-        runtime_env = {
-            "env_vars": {
-                "PYTHONPATH": project_root
-            }
-        }
+        runtime_env = {"env_vars": {"PYTHONPATH": project_root}}
         ray.init(num_cpus=os.cpu_count() - 2, runtime_env=runtime_env)
         # workers for loading data
         num_workers = int(3 / 4 * os.cpu_count())
@@ -677,12 +741,12 @@ class CellViTInference:
                 cell_geojson_object = get_template_segmentation()
                 cell_geojson_object["id"] = str(uuid.uuid4())
                 cell_geojson_object["geometry"]["coordinates"] = final_c
-                cell_geojson_object["properties"]["classification"][
-                    "name"
-                ] = self.label_map[cell_type]
-                cell_geojson_object["properties"]["classification"][
-                    "color"
-                ] = COLOR_DICT_CELLS[cell_type]
+                cell_geojson_object["properties"]["classification"]["name"] = (
+                    self.label_map[cell_type]
+                )
+                cell_geojson_object["properties"]["classification"]["color"] = (
+                    COLOR_DICT_CELLS[cell_type]
+                )
                 geojson_placeholder.append(cell_geojson_object)
         else:
             cell_detection_df = pd.DataFrame(cell_list)
@@ -694,12 +758,12 @@ class CellViTInference:
                 cell_geojson_object = get_template_point()
                 cell_geojson_object["id"] = str(uuid.uuid4())
                 cell_geojson_object["geometry"]["coordinates"] = centroids
-                cell_geojson_object["properties"]["classification"][
-                    "name"
-                ] = self.label_map[cell_type]
-                cell_geojson_object["properties"]["classification"][
-                    "color"
-                ] = COLOR_DICT_CELLS[cell_type]
+                cell_geojson_object["properties"]["classification"]["name"] = (
+                    self.label_map[cell_type]
+                )
+                cell_geojson_object["properties"]["classification"]["color"] = (
+                    COLOR_DICT_CELLS[cell_type]
+                )
                 geojson_placeholder.append(cell_geojson_object)
         return geojson_placeholder
 

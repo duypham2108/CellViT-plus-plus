@@ -139,6 +139,10 @@ class WSI:
             * dict: patch metadata as dictionary
         """
         patch = Image.open(self.patched_slide_path / "patches" / patch_name)
+        img_original = np.asarray(patch)
+        from retinex import msrcr
+        img_msrcr = msrcr(img_original, sigmas=(25., 50., 100.,))
+        patch = Image.fromarray(img_msrcr)
         if transform:
             patch = transform(patch)
 
@@ -176,6 +180,7 @@ class WSI:
             transformed_patch, meta = self.process_patch_image(patch, transform)
             patches.append(transformed_patch)
             metadata.append(meta)
+        print("work")
         patches = torch.stack(patches)
 
         return patches, metadata
